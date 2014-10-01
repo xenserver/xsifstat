@@ -58,18 +58,15 @@ regex = re.compile(
         + numeric_field # Tx compressed
         )
 
-cache = { } # Holds mapping vif -> (rxbytes, txbytes, group, bridge) tuple
+cache = { } # Holds mapping vif -> (rxbytes, txbytes, bridge) tuple
 
 current = { } # Holds information about the current sample
 # Structure:
 # {bridge_name -> {
 #   'tx' -> int,
 #   'rx' -> int,
-#   'children' -> {netback_group -> {
-#                   'tx' -> int,
-#                   'rx' -> int,
-#                   'children' -> {
-#                     vif_name -> (dtx, drx)}}}}}
+#   'children' -> {
+#     vif_name -> (dtx, drx)}}}}}
 
 # Do the open once, outside the loop and seek back to the beginning
 # for every read (thus avoiding closing & reopening)
@@ -96,15 +93,13 @@ while True:
             vif = match.group(1)
             rx_bytes = int(match.group(2))
             tx_bytes = int(match.group(3))
-            group = -1
             bridge = ''
             if vif in cache:
                 # Have existing information for this interface, so we
-                # can look up the bridge & netback group, find the
+                # can look up the bridge, find the
                 # previous Tx and Rx bytes, and report a throughput
                 # this time around
-                group = cache[vif][2]
-                bridge = cache[vif][3]
+                bridge = cache[vif][2]
                 drx = rx_bytes - cache[vif][0]
                 # Handle the case where the tx or rx bytes wrap around
                 if drx < 0:
@@ -115,38 +110,25 @@ while True:
                 # Add this VIF to the current report
                 if bridge not in current:
                     current[bridge] = { 'tx': 0.0, 'rx': 0.0, 'children': {} }
-                if group not in current[bridge]['children']:
-                    current[bridge]['children'][group] = {
-                            'tx': 0.0, 
-                            'rx': 0.0, 
-                            'children': {} }
                 current[bridge]['tx'] += dtx
                 current[bridge]['rx'] += drx
-                current[bridge]['children'][group]['tx'] += dtx
-                current[bridge]['children'][group]['rx'] += drx
-                current[bridge]['children'][group]['children'][vif] = \
-                        (drx, dtx)
+                current[bridge]['children'][vif] = (drx, dtx)
             else:
-                # Determine netback group
                 try:
-                    f = open('/sys/devices/xen-backend/%s/group' 
-                            % vif.replace('.','-').replace('vif','vif-'),
-                            'r')
-                    group = int(f.read().strip())
-                    f.close()
                     # Determine bridge
                     f = open('/sys/class/net/%s/brport/bridge/uevent'
                             % vif, 'r')
-                    bridge = f.readlines()[0].replace('INTERFACE=','').strip()
+                    iflines = [line for line in f.readlines() if line.startswith("INTERFACE=")]
+                    bridge = iflines[0].replace('INTERFACE=','').strip()
                     f.close()
                     attached_vifs.add(vif) # Add this VIF to the attached list
                     # This is done so that we don't immediately remove it
                     # from the cache, which would mean it never got displayed
                 except:
-                    pass # Ignore the case where we can't read the files above
+                    pass # Ignore the case where we can't read the file above
             # Store all the information in the cache so it is available next
             # sample period
-            cache[vif] = (rx_bytes, tx_bytes, group, bridge)
+            cache[vif] = (rx_bytes, tx_bytes, bridge)
     # Output any stats we have
     for bridge, bridgestats in current.iteritems():
         bridge_rxrate = float(bridgestats['rx']*8) / float(sample_period)
@@ -155,21 +137,14 @@ while True:
         bridge_txrate /= 1e9 # Gbit/s
         print '\n%s: Rx=%.3f Gbit/s, Tx=%.3f Gbit/s' \
                 % (bridge, bridge_rxrate, bridge_txrate)
-        for group, groupstats in bridgestats['children'].iteritems():
-            group_rxrate = float(groupstats['rx']*8) / float(sample_period)
-            group_rxrate /= 1e9 # Gbit/s
-            group_txrate = float(groupstats['tx']*8) / float(sample_period)
-            group_txrate /= 1e9 # Gbit/s
-            print '|- netback/%s: Rx=%.3f Gbit/s, Tx=%.3f Gbit/s' \
-                    % (group, group_rxrate, group_txrate)
-            for vif, vifstats in groupstats['children'].iteritems():
-                attached_vifs.add(vif) # Add this vif to the list of attached vifs
-                rxrate = float(vifstats[0]*8) / float(sample_period)
-                rxrate /= 1e9 # Gbit/s
-                txrate = float(vifstats[1]*8) / float(sample_period)
-                txrate /= 1e9 # Gbit/s
-                print "|  |- %s: Rx=%.3f Gbit/s, Tx=%.3f Gbit/s" \
-                        % (vif, rxrate, txrate)
+        for vif, vifstats in bridgestats['children'].iteritems():
+            attached_vifs.add(vif) # Add this vif to the list of attached vifs
+            rxrate = float(vifstats[0]*8) / float(sample_period)
+            rxrate /= 1e9 # Gbit/s
+            txrate = float(vifstats[1]*8) / float(sample_period)
+            txrate /= 1e9 # Gbit/s
+            print "|- %s: Rx=%.3f Gbit/s, Tx=%.3f Gbit/s" \
+                    % (vif, rxrate, txrate)
     # Now wait sample_period seconds
     time.sleep(sample_period)
 
