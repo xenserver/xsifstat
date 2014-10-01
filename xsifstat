@@ -118,7 +118,8 @@ while True:
                     # Determine bridge
                     f = open('/sys/class/net/%s/brport/bridge/uevent'
                             % vif, 'r')
-                    bridge = f.readlines()[0].replace('INTERFACE=','').strip()
+                    iflines = [line for line in f.readlines() if line.startswith("INTERFACE=")]
+                    bridge = iflines[0].replace('INTERFACE=','').strip()
                     f.close()
                     attached_vifs.add(vif) # Add this VIF to the attached list
                     # This is done so that we don't immediately remove it
